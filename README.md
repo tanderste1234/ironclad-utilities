@@ -15,20 +15,20 @@ Specialized CSV wrangling and header-injection utilities built for local data au
 11. the next command is `pip install psutil duckdb pandas rapidfuzz` wait for this to resolve then move on to the next steps
 > **Note:** this last command works reguardless of operating system. When you are done running the tool and you have exited the ui remember to run `deactivate` to exit your venv environment
 12. now you need to download the `EULA.txt file` from this repo follow steps 3 through 7 except with the file name as `EULA.txt`
-13. okay so now the raw data tool needs a specific file called `templateFile.csv` this file is a one line csv file that line should contain all of the headers for your raw headerless files
+13. okay so for both tools they need a specific file called `templateFile.csv` this file is a one line csv file that line should contain all of the headers for your raw headerless files remember to save this file into the folder where the tools are installed
 14. once you create that file with whatever editor you prefer save it in the folder the tool
 # RAW data Tool
 ## 💻 Using The Tool
 1. make sure you are in your venv environment we set up in the the setup instructions if you don't have the `(venv)` at the beginning of your command prompt refer to step 4 of the setup steps for what command to run
 2. once in your venv run `Python3 RawDataTool.py` a UI window should appear
-3. then click the <kbd>Add Files...</kbd> button near the top of the window and next to the white box labeled Input Headless Files then select your files for the current year using windows file explorer
-5. then select either Chronological or Reverse Chronological depending on what you need but please use same order for all your files 
+3.  then click the <kbd>Add Files...</kbd> button near the top of the window and next to the white box labeled Input Headless Files then select your files for the current year using windows file explorer
+4. then select either Chronological or Reverse Chronological depending on what you need for your date formatting as the program currently sorts by date but please use same order for all your files 
 > **Note:** the default is Chronological if unsure use that
-6. once you are done naming the output file click the <kbd>Merge & Apply Headers</kbd> button
-7. press the <kbd>Okay</kbd> button on the success prompt and check the folder where your output is for a headered file with dates ordered by whatever you selected in step 4
+5. once you are done naming the output file click the <kbd>Merge & Apply Headers</kbd> button
+6. press the <kbd>Okay</kbd> button on the success prompt and check the folder where your output is for a headered file with dates ordered by whatever you selected in step 4
 > **Note:** now this file is ready for the next tool
-8. to create the next file hit the <kbd>Clear All</kbd> button (located below the <kbd>Remove Selected</kbd> button and next to the white box that displays your file inputs)
-9. Now repeat steps 3 through 8 until all headered year files have been properly generated
+7. to create the next file hit the <kbd>Clear All</kbd> button (located below the <kbd>Remove Selected</kbd> button and next to the white box that displays your file inputs)
+8. Now repeat steps 3 through 7 until all headered files have been properly generated
 # CSV_TOOL
 ## 💻 Using The Tool
 1. to start the tool make sure you are in your venv environment we set up in the the setup instructions if you don't have the `(venv)` at the beginning of your command prompt refer to step 4 of the setup steps for what command to run
