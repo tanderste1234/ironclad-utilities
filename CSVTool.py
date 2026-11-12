@@ -842,7 +842,10 @@ def create_application():
 
     selected_headers_var = tk.StringVar(value="No Headers Selected (Click to Search/Select)")
     rename_status_var = tk.StringVar(value="No Column Renames Configured")
-    target_cols_entry = ttk.Entry(config_frame)
+    
+    # Template file variables for 'Other' mode
+    template_file_var = tk.StringVar(value="templateFile.csv")
+    template_headers_var = tk.StringVar()
 
     def update_header_selection_display(new_selections):
         state["selected_carbon_headers"] = new_selections
@@ -916,8 +919,9 @@ def create_application():
             if source_type_var.get() == "Carbon":
                 update_header_selection_display(set(headers))
             else:
-                target_cols_entry.delete(0, tk.END)
-                target_cols_entry.insert(0, ", ".join(headers))
+                if headers:
+                    template_combo['values'] = headers
+                    template_combo.set(headers[0])
 
             update_column_rename_map(new_rename_map)
             state["calculated_fields"] = new_calculated_fields
@@ -934,6 +938,7 @@ def create_application():
     target_cols_frame = ttk.Frame(config_frame)
     target_cols_frame.grid(row=1, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
+    # Carbon mode selection frame
     target_cols_select_frame = ttk.Frame(target_cols_frame)
 
     selected_display_entry = ttk.Entry(target_cols_select_frame, textvariable=selected_headers_var, state="readonly")
@@ -950,14 +955,55 @@ def create_application():
     select_btn = ttk.Button(target_cols_select_frame, text="Select Headers...", command=handle_open_searchable_dialog)
     select_btn.pack(side=tk.RIGHT)
 
+    # Other mode template file & dropdown frame
+    other_target_frame = ttk.Frame(target_cols_frame)
+
+    tpl_file_subframe = ttk.Frame(other_target_frame)
+    tpl_file_subframe.pack(fill=tk.X, expand=True, pady=(0, 2))
+
+    ttk.Label(tpl_file_subframe, text="Template File:").pack(side=tk.LEFT, padx=(0, 5))
+    tpl_entry = ttk.Entry(tpl_file_subframe, textvariable=template_file_var, width=25)
+    tpl_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+    def browse_template_file():
+        path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
+        if path:
+            template_file_var.set(path)
+            load_template_headers()
+
+    ttk.Button(tpl_file_subframe, text="Browse...", command=browse_template_file).pack(side=tk.LEFT, padx=(0, 2))
+
+    def load_template_headers():
+        path = template_file_var.get().strip()
+        headers = get_headers_from_file(path)
+        if headers:
+            template_combo['values'] = headers
+            if headers:
+                template_combo.set(headers[0])
+        else:
+            template_combo['values'] = []
+            template_combo.set("No headers found")
+
+    ttk.Button(tpl_file_subframe, text="Load", command=load_template_headers).pack(side=tk.LEFT, padx=(0, 2))
+
+    tpl_combo_subframe = ttk.Frame(other_target_frame)
+    tpl_combo_subframe.pack(fill=tk.X, expand=True, pady=(2, 0))
+
+    ttk.Label(tpl_combo_subframe, text="Template Column:").pack(side=tk.LEFT, padx=(0, 5))
+    template_combo = ttk.Combobox(tpl_combo_subframe, textvariable=template_headers_var, state="readonly")
+    template_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    root.after(200, load_template_headers)
+    template_file_var.trace_add("write", lambda *args: load_template_headers())
+
     def on_source_type_changed(*args):
         selected_mode = source_type_var.get()
         if selected_mode == "Carbon":
-            target_cols_entry.pack_forget()
+            other_target_frame.pack_forget()
             target_cols_select_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         else:
             target_cols_select_frame.pack_forget()
-            target_cols_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            other_target_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     source_type_var.trace_add("write", on_source_type_changed)
     on_source_type_changed()
@@ -977,13 +1023,11 @@ def create_application():
         if selected_mode == "Carbon":
             available_cols = sorted(list(state["selected_carbon_headers"]))
         else:
-            raw_text = target_cols_entry.get().strip()
-            if raw_text:
+            sel_col = template_headers_var.get().strip()
+            if sel_col and sel_col != "No headers found":
+                available_cols = [sel_col]
+            else:
                 available_cols = []
-                for c in raw_text.split(","):
-                    cleaned_col = c.strip()
-                    if cleaned_col:
-                        available_cols.append(cleaned_col)
 
         if state["calculated_fields"]:
             for calc_col in state["calculated_fields"].keys():
@@ -991,7 +1035,7 @@ def create_application():
                     available_cols.append(calc_col)
 
         if not available_cols:
-            messagebox.showinfo("Rename Columns", "Please select or input target column filters first before configuring renames.")
+            messagebox.showinfo("Rename Columns", "Please select or load target column filters first before configuring renames.")
             return
 
         open_rename_dialog(
@@ -1118,7 +1162,7 @@ def create_application():
         if source_type == "Carbon":
             target_cols = ",".join(sorted(list(state["selected_carbon_headers"])))
         else:
-            target_cols = target_cols_entry.get().strip()
+            target_cols = template_headers_var.get().strip()
 
         start_dates = start_date_entry.get().strip()
         end_dates = end_date_entry.get().strip()
