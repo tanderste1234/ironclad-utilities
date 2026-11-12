@@ -11,7 +11,7 @@ Specialized CSV wrangling and header-injection utilities built for local data au
 8. once you have ensured python is installed then run `pip install venv` if you encounter errors on linux look them up and you should find a way to run this command
 9. the next command required is `Python3 venv .venv`
 > **Note:** if the command worked you should now see a `(venv)` at the beginning of your command prompt
-10. the next command is different based on OS on linux it would be `source .venv/bin/activate` on windows it is `source .venv\Scripts\activate.bat` the `.bat` part is optional but I included it just in case
+10. the next command is different based on OS on linux it would be `source .venv/bin/activate` on windows it is `.venv\Scripts\activate.bat` the `.bat` part is optional
 11. the next command is `pip install psutil duckdb pandas rapidfuzz` wait for this to resolve then move on to the next steps
 > **Note:** this last command works reguardless of operating system. When you are done running the tool and you have exited the ui remember to run `deactivate` to exit your venv environment
 12. now you need to download the `EULA.txt file` from this repo follow steps 3 through 7 except with the file name as `EULA.txt`
