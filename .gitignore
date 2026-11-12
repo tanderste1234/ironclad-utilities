@@ -1,0 +1,16 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+
+# Local virtual environments
+.venv/
+venv/
+
+# Operating system trash
+.DS_Store
+Thumbs.db
+
+# Local build / PyInstaller artifacts
+build/
+dist/
+*.spec
