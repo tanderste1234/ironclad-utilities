@@ -10,6 +10,7 @@ import gc
 import hashlib
 import time
 import psutil
+import io
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
@@ -19,34 +20,6 @@ try:
     HAS_RAPIDFUZZ = True
 except ImportError:
     HAS_RAPIDFUZZ = False
-
-
-# ---------------------------------------------------------------------------
-# CARBON HEADER PRESETS
-# ---------------------------------------------------------------------------
-
-CARBON_HEADER_OPTIONS = [
-    "Hs", "tau", "u_star", "Ts_stdev", "Ts_Ux_cov", "Ts_Uy_cov",
-    "Ts_Uz_cov", "Ux_stdev", "Ux_Uy_cov", "Ux_Uz_cov", "Uy_stdev", "Uy_Uz_cov", "Uz_stdev",
-    "wnd_spd", "rslt_wnd_spd", "wnd_dir_sonic", "std_wnd_dir", "wnd_dir_compass", "Ux_Avg",
-    "Uy_Avg", "Uz_Avg", "Ts_Avg", "sonic_azimuth", "sonic_samples_Tot", "no_sonic_head_Tot",
-    "no_new_sonic_data_Tot", "amp_l_f_Tot", "amp_h_f_Tot", "sig_lck_f_Tot", "del_T_f_Tot",
-    "aq_sig_f_Tot", "sonic_cal_err_f_Tot", "Fc_wpl", "LE_wpl", "Hc", "CO2_stdev", "CO2_Ux_cov",
-    "CO2_Uy_cov", "CO2_Uz_cov", "H2O_stdev", "H2O_Ux_cov", "H2O_Uy_cov", "H2O_Uz_cov", "Tc_stdev",
-    "Tc_Ux_cov", "Tc_Uy_cov", "Tc_Uz_cov", "CO2_mean", "H2O_mean", "amb_tmpr_Avg", "amb_press_mean",
-    "Tc_mean", "rho_a_mean", "Fc_irga", "LE_irga", "CO2_wpl_LE", "CO2_wpl_H", "H2O_wpl_LE",
-    "H2O_wpl_H", "irga_samples_Tot", "no_irga_head_Tot", "no_new_irga_data_Tot", "irga_bad_data_f_Tot",
-    "gen_sys_fault_f_Tot", "sys_startup_f_Tot", "motor_spd_f_Tot", "tec_tmpr_f_Tot", "src_pwr_f_Tot",
-    "src_tmpr_f_Tot", "src_curr_f_Tot", "irga_off_f_Tot", "irga_sync_f_Tot", "amb_tmpr_f_Tot",
-    "amb_press_f_Tot", "CO2_I_f_Tot", "CO2_Io_f_Tot", "H2O_I_f_Tot", "H2O_Io_f_Tot",
-    "CO2_Io_var_f_Tot", "H2O_Io_var_f_Tot", "CO2_sig_strgth_f_Tot", "H2O_sig_strgth_f_Tot",
-    "CO2_sig_strgth_mean", "H2O_sig_strgth_mean", "T_tmpr_rh_mean", "e_tmpr_rh_mean",
-    "e_sat_tmpr_rh_mean", "H2O_tmpr_rh_mean", "RH_tmpr_rh_mean", "rho_a_tmpr_rh_mean", "Rn_Avg",
-    "Rn_meas_Avg", "Rain_TE525_Tot", "LWS_mV_Avg", "LWS_mV_Max", "LWS_mV_Min", "WetSeconds",
-    "WindSpd_WXT_mean", "WindDir_WXT_mean", "WindDir_WXT_StdDev", "AirTemp_WXT_Avg", "RH_WXT",
-    "AirPress_WXT", "Rain_WXT_Tot", "Hits_WXT_Tot", "PAR_Den_Avg", "PAR_Tot_Tot", "panel_tmpr_Avg",
-    "batt_volt_Avg", "slowsequence_Tot"
-]
 
 
 # ---------------------------------------------------------------------------
@@ -68,13 +41,12 @@ def write_performance_report_csv(report_filename, metrics_data):
             writer = csv.writer(csv_file)
             if not file_exists:
                 writer.writerow([
-                    "Timestamp", "Source_Type", "Execution_Time_Seconds", 
+                    "Timestamp", "Execution_Time_Seconds", 
                     "Rows_Processed", "Rows_Written", "Processing_Rate_Rows_Per_Sec", 
                     "Peak_RAM_MB"
                 ])
             writer.writerow([
                 time.strftime("%Y-%m-%d %H:%M:%S"),
-                metrics_data.get("source_type", "Unknown"),
                 f"{metrics_data.get('elapsed_time', 0.0):.2f}",
                 metrics_data.get("rows_processed", 0),
                 metrics_data.get("rows_written", 0),
@@ -89,33 +61,72 @@ def sanitize_text(val):
     if pd.isna(val) or val is None:
         return ""
     s = str(val).strip()
-    if (s.startswith('"') and s.endswith('"')) or (
-        s.startswith("'") and s.endswith("'")):
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
         s = s[1:-1].strip()
     return s
 
 
-def get_headers_from_file(file_path):
+def get_headers_from_file(file_path, order_matters=False, multiple_dates=False):
     if not os.path.exists(file_path):
         return None
+    raw_headers = []
     try:
-        with open(file_path, mode="r", newline="", encoding="utf-8-sig", errors="ignore") as file:
-            reader = csv.reader(file)
-            headers = next(reader)
-            cleaned_headers = [h.strip() for h in headers]
-            return cleaned_headers
+        df = pd.read_csv(file_path, nrows=0, encoding="utf-8-sig", low_memory=False, mangle_dupe_cols=False)
+        raw_headers = [str(col).strip() for col in df.columns if str(col).strip()]
     except Exception:
+        try:
+            with open(file_path, mode="r", newline="", encoding="utf-8-sig", errors="ignore") as file:
+                reader = csv.reader(file)
+                for row in reader:
+                    cleaned_row = [item.strip() for item in row if item.strip()]
+                    if cleaned_row:
+                        raw_headers = cleaned_row
+                        break
+        except Exception:
+            pass
+
+    if not raw_headers:
         return None
+
+    if not order_matters:
+        return list(dict.fromkeys(raw_headers))
+    else:
+        processed_headers = []
+        counts = {}
+        for h in raw_headers:
+            if h in counts:
+                counts[h] += 1
+                processed_headers.append(f"{h}.{counts[h]}")
+            else:
+                counts[h] = 1
+                processed_headers.append(h)
+        return processed_headers
+
+
+def convert_user_format_to_python(fmt):
+    if not fmt:
+        return "%Y/%m/%d"
+    converted = fmt.replace("YYYY", "%Y").replace("YY", "%y")
+    converted = converted.replace("MM", "%m").replace("M", "%m")
+    converted = converted.replace("DD", "%d").replace("D", "%d")
+    return converted
+
+
+def convert_output_format_to_strftime(fmt):
+    if not fmt:
+        return "%m/%d/%Y"
+    converted = fmt.replace("YYYY", "%Y").replace("YY", "%y")
+    converted = converted.replace("MM", "%m").replace("M", "%m")
+    converted = converted.replace("DD", "%d").replace("D", "%d")
+    return converted
 
 
 def parse_date_range(start_str, end_str, debug_func=print):
     if not start_str and not end_str:
         return []
 
-    raw_starts = [item.strip() for item in start_str.split(",")
-                             if item.strip()] if start_str else []
-    raw_ends = [item.strip() for item in end_str.split(",")
-                           if item.strip()] if end_str else []
+    raw_starts = [item.strip() for item in start_str.split(",") if item.strip()] if start_str else []
+    raw_ends = [item.strip() for item in end_str.split(",") if item.strip()] if end_str else []
 
     max_len = max(len(raw_starts), len(raw_ends))
     if max_len == 0:
@@ -135,12 +146,12 @@ def parse_date_range(start_str, end_str, debug_func=print):
         e_dt = None
 
         if c_start:
-            s_dt = pd.to_datetime(c_start, format="%Y/%m/%d", errors="coerce")
+            s_dt = pd.to_datetime(c_start, format="%m/%d/%Y", errors="coerce")
             if pd.notna(s_dt):
                 s_dt = s_dt.floor("D")
 
         if c_end:
-            e_dt = pd.to_datetime(c_end, format="%Y/%m/%d", errors="coerce")
+            e_dt = pd.to_datetime(c_end, format="%m/%d/%Y", errors="coerce")
             if pd.notna(e_dt):
                 e_dt = e_dt.floor("D")
 
@@ -169,30 +180,34 @@ def process_single_csv_file(
     overall_written_ref,
     peak_memory_ref,
     enable_metrics=False,
-    source_type="Carbon"
+    input_date_formats=None,
+    output_date_format="%m/%d/%Y",
+    order_matters=False,
+    multiple_dates=False,
+    is_partitioned=False,
+    partition_size=0
 ):
     if not os.path.exists(file_path):
         if debug_func:
             debug_func(f"ERROR: Input file path invalid or missing: {file_path}")
         return False
 
-    file_headers = get_headers_from_file(file_path)
-    if not file_headers or len(file_headers) < 3:
+    file_headers = get_headers_from_file(file_path, order_matters=order_matters, multiple_dates=multiple_dates)
+    if not file_headers or len(file_headers) < 1:
         if debug_func:
-            debug_func(f"ERROR: Could not extract headers or file has fewer than 3 columns: {os.path.basename(file_path)}")
+            debug_func(f"ERROR: Could not extract headers from input file: {os.path.basename(file_path)}")
         return False
-
-    year_col = file_headers[0]
-    day_col = file_headers[1]
-    time_col = file_headers[2]
 
     read_kwargs = {
         "chunksize": chunksize,
         "dtype": str,
         "header": 0,
         "low_memory": False,
-        "on_bad_lines": "skip"
+        "on_bad_lines": "skip",
+        "mangle_dupe_cols": True
     }
+
+    strftime_out = convert_output_format_to_strftime(output_date_format)
 
     try:
         with open(file_path, "r", encoding="utf-8-sig", errors="ignore") as in_file:
@@ -209,21 +224,63 @@ def process_single_csv_file(
                 cleaned_columns = [str(col).strip() for col in chunk.columns]
                 chunk.columns = cleaned_columns
 
+                # Handle Partitioned Files
+                if is_partitioned and partition_size > 0:
+                    partitioned_chunks = []
+                    num_cols = len(chunk.columns)
+                    for start_c in range(0, num_cols, partition_size):
+                        sub_cols = chunk.columns[start_c:start_c + partition_size]
+                        sub_df = chunk[sub_cols].copy()
+                        partitioned_chunks.append(sub_df)
+                    if partitioned_chunks:
+                        base_cols = partitioned_chunks[0].columns
+                        normalized_chunks = []
+                        for sc in partitioned_chunks:
+                            sc.columns = base_cols[:len(sc.columns)]
+                            normalized_chunks.append(sc)
+                        chunk = pd.concat(normalized_chunks, ignore_index=True)
+
                 parsed_dates = pd.Series(index=chunk.index, dtype="datetime64[ns]")
-                yr_num = pd.to_numeric(chunk[year_col].astype(str).str.strip(), errors="coerce")
-                day_num = pd.to_numeric(chunk[day_col].astype(str).str.strip(), errors="coerce")
 
-                valid_mask = yr_num.notna() & day_num.notna() & (day_num >= 1) & (day_num <= 366)
+                if not input_date_formats:
+                    # Fallback to first column as date string if no format provided
+                    date_col = file_headers[0]
+                    if date_col in chunk.columns:
+                        parsed_dates = pd.to_datetime(chunk[date_col].astype(str).str.strip(), errors="coerce")
+                else:
+                    if len(input_date_formats) == 1:
+                        fmt_str = convert_user_format_to_python(input_date_formats[0])
+                        date_col = file_headers[0]
+                        date_str_series = chunk[date_col].astype(str).str.strip() if date_col in chunk.columns else chunk.iloc[:, 0].astype(str).str.strip()
+                        parsed_dates = pd.to_datetime(date_str_series, format=fmt_str, errors="coerce")
+                    else:
+                        unique_fmts = set(input_date_formats)
+                        if len(unique_fmts) == 1 and len(input_date_formats) > 1:
+                            fmt_str = convert_user_format_to_python(input_date_formats[0])
+                            col_name = file_headers[0]
+                            if col_name in chunk.columns:
+                                date_str_series = chunk[col_name].astype(str).str.strip()
+                                parsed_dates = pd.to_datetime(date_str_series, format=fmt_str, errors="coerce")
+                        else:
+                            combined_str = pd.Series("", index=chunk.index)
+                            py_fmts = []
+                            for idx, fmt in enumerate(input_date_formats):
+                                if idx < len(file_headers):
+                                    col_name = file_headers[idx]
+                                    if col_name in chunk.columns:
+                                        combined_str = combined_str + " " + chunk[col_name].astype(str).str.strip()
+                                py_fmts.append(convert_user_format_to_python(fmt))
+                            combined_str = combined_str.str.strip()
+                            full_fmt_str = " ".join(py_fmts)
+                            try:
+                                parsed_dates = pd.to_datetime(combined_str, format=full_fmt_str, errors="coerce")
+                            except Exception:
+                                fmt_str = convert_user_format_to_python(input_date_formats[0])
+                                col_name = file_headers[0]
+                                date_str_series = chunk[col_name].astype(str).str.strip() if col_name in chunk.columns else pd.Series("", index=chunk.index)
+                                parsed_dates = pd.to_datetime(date_str_series, format=fmt_str, errors="coerce")
 
-                if valid_mask.any():
-                    clean_years = yr_num[valid_mask].astype(int).astype(str)
-                    clean_days = day_num[valid_mask].astype(int)
-
-                    base_dates = pd.to_datetime(clean_years + "-01-01", format="%Y-%m-%d", errors="coerce")
-                    day_offsets = pd.to_timedelta(clean_days - 1, unit="D")
-                    parsed_dates.loc[valid_mask] = (base_dates + day_offsets).dt.floor("D")
-
-                chunk.insert(0, "date", parsed_dates.dt.strftime("%Y/%m/%d"))
+                chunk.insert(0, "date", parsed_dates.dt.strftime(strftime_out))
 
                 if calculated_fields:
                     for calc_name, formula in calculated_fields.items():
@@ -263,10 +320,6 @@ def process_single_csv_file(
                 existing_cols = []
                 if "date" in filtered_chunk.columns:
                     existing_cols.append("date")
-                if day_col in filtered_chunk.columns and day_col not in existing_cols:
-                    existing_cols.append(day_col)
-                if time_col in filtered_chunk.columns and time_col not in existing_cols:
-                    existing_cols.append(time_col)
 
                 if columns_to_keep:
                     for target in columns_to_keep:
@@ -282,9 +335,7 @@ def process_single_csv_file(
                 filtered_chunk = filtered_chunk[existing_cols]
 
                 default_renames = {
-                    "date": "TIMESTAMP_1",
-                    day_col: "DOY",
-                    time_col: "TIMESTAMP_2"
+                    "date": "TIMESTAMP_1"
                 }
                 final_rename_map = {**default_renames, **column_rename_map}
                 filtered_chunk.rename(columns=final_rename_map, inplace=True)
@@ -319,7 +370,12 @@ def execute_huge_file_processing(
     end_date_str="",
     chunksize=100000,
     enable_metrics=False,
-    source_type="Carbon",
+    input_date_formats=None,
+    output_date_format="%m/%d/%Y",
+    order_matters=False,
+    multiple_dates=False,
+    is_partitioned=False,
+    partition_size=0,
     debug_func=print,
     progress_func=lambda p, w: None
 ):
@@ -327,7 +383,7 @@ def execute_huge_file_processing(
     initial_mem = get_current_process_memory_mb() if enable_metrics else 0.0
 
     if debug_func:
-        debug_func(f"Backend execution initiated for mode [{source_type}]...")
+        debug_func("Backend execution initiated...")
         if enable_metrics:
             debug_func(f"[METRIC] Initial RAM Allocation: {initial_mem:.2f} MB")
 
@@ -391,7 +447,12 @@ def execute_huge_file_processing(
             overall_written_ref=overall_written_ref,
             peak_memory_ref=peak_memory_ref,
             enable_metrics=enable_metrics,
-            source_type=source_type
+            input_date_formats=input_date_formats,
+            output_date_format=output_date_format,
+            order_matters=order_matters,
+            multiple_dates=multiple_dates,
+            is_partitioned=is_partitioned,
+            partition_size=partition_size
         )
 
     elapsed_time = time.perf_counter() - start_time if enable_metrics else 0.0
@@ -409,7 +470,6 @@ def execute_huge_file_processing(
         debug_func("==================================================")
 
         report_data = {
-            "source_type": source_type,
             "elapsed_time": elapsed_time,
             "rows_processed": overall_processed_ref[0],
             "rows_written": overall_written_ref[0],
@@ -595,9 +655,9 @@ def handle_apply_selection(on_apply_callback, working_set, dialog):
     dialog.destroy()
 
 
-def open_searchable_dialog(parent, options, selected_set, on_apply_callback):
+def open_searchable_dialog(parent, options, selected_set, on_apply_callback, dialog_title="Select Headers"):
     dialog = tk.Toplevel(parent)
-    dialog.title("Select Carbon Headers")
+    dialog.title(dialog_title)
     dialog.geometry("400x450")
     dialog.transient(parent)
     dialog.grab_set()
@@ -712,32 +772,21 @@ def open_rename_dialog(parent, available_columns, current_rename_map, on_apply_c
 
 def create_application():
     root = tk.Tk()
-    root.title("CSV Tool v2.3.0")
+    root.title("CSV Tool v1.2.0")
     root.after(100, lambda: check_and_prompt_eula(root, on_complete_callback=on_eula_complete))
-    root.geometry("750x580")
-    root.minsize(650, 540)
+    root.geometry("750x720")
+    root.minsize(650, 600)
 
     state = {
         "input_rows": [],
         "debug_visible": False,
-        "selected_carbon_headers": set(),
+        "selected_template_headers": set(),
         "column_rename_map": {},
         "calculated_fields": {}
     }
 
     main_frame = ttk.Frame(root, padding="8")
     main_frame.pack(fill=tk.BOTH, expand=True)
-
-    source_frame = ttk.LabelFrame(main_frame, text="Source Type", padding="6")
-    source_frame.pack(fill=tk.X, pady=2)
-
-    source_type_var = tk.StringVar(value="Carbon")
-
-    carbon_radio = ttk.Radiobutton(source_frame, text="Carbon", variable=source_type_var, value="Carbon")
-    carbon_radio.pack(side=tk.LEFT, padx=(10, 20))
-
-    other_radio = ttk.Radiobutton(source_frame, text="Other", variable=source_type_var, value="Other")
-    other_radio.pack(side=tk.LEFT, padx=10)
 
     file_frame = ttk.LabelFrame(main_frame, text="File Options", padding="6")
     file_frame.pack(fill=tk.X, pady=2)
@@ -840,20 +889,29 @@ def create_application():
     preset_path_entry = ttk.Entry(preset_container_frame, textvariable=preset_path_var, state="readonly")
     preset_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
-    selected_headers_var = tk.StringVar(value="No Headers Selected (Click to Search/Select)")
+    selected_template_headers_var = tk.StringVar(value="No Headers Selected (Click to Search/Select)")
     rename_status_var = tk.StringVar(value="No Column Renames Configured")
     
-    # Template file variables for 'Other' mode
+    # Template file variables
     template_file_var = tk.StringVar(value="templateFile.csv")
-    template_headers_var = tk.StringVar()
+    order_matters_var = tk.BooleanVar(value=False)
+    multiple_dates_var = tk.BooleanVar(value=False)
+    is_partitioned_var = tk.BooleanVar(value=False)
 
-    def update_header_selection_display(new_selections):
-        state["selected_carbon_headers"] = new_selections
-        if not state["selected_carbon_headers"]:
-            selected_headers_var.set("No Headers Selected (Click to Search/Select)")
+    # Date formatting variables
+    output_date_format_var = tk.StringVar(value="MM/DD/YYYY")
+    num_fields_var = tk.StringVar(value="1")
+    partition_size_var = tk.StringVar(value="10")
+
+    input_format_entries = []
+
+    def update_template_header_selection_display(new_selections):
+        state["selected_template_headers"] = new_selections
+        if not state["selected_template_headers"]:
+            selected_template_headers_var.set("No Headers Selected (Click to Search/Select)")
         else:
-            sorted_list = sorted(list(state["selected_carbon_headers"]))
-            selected_headers_var.set(f"{len(sorted_list)} Selected: " + ", ".join(sorted_list))
+            sorted_list = sorted(list(state["selected_template_headers"]))
+            selected_template_headers_var.set(f"{len(sorted_list)} Selected: " + ", ".join(sorted_list))
 
     def update_column_rename_map(new_map):
         state["column_rename_map"] = new_map
@@ -915,14 +973,6 @@ def create_application():
                             new_calculated_fields[name] = formula_lines[idx]
 
             preset_path_var.set(os.path.basename(path))
-
-            if source_type_var.get() == "Carbon":
-                update_header_selection_display(set(headers))
-            else:
-                if headers:
-                    template_combo['values'] = headers
-                    template_combo.set(headers[0])
-
             update_column_rename_map(new_rename_map)
             state["calculated_fields"] = new_calculated_fields
 
@@ -933,30 +983,14 @@ def create_application():
 
     ttk.Button(preset_container_frame, text="Apply Preset File...", command=load_preset_file).pack(side=tk.RIGHT)
 
-    ttk.Label(config_frame, text="Additional Columns to Keep:").grid(row=1, column=0, sticky=tk.W, pady=1)
+    ttk.Label(config_frame, text="Target Columns to Keep:").grid(row=1, column=0, sticky=tk.W, pady=1)
 
     target_cols_frame = ttk.Frame(config_frame)
     target_cols_frame.grid(row=1, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
-    # Carbon mode selection frame
-    target_cols_select_frame = ttk.Frame(target_cols_frame)
-
-    selected_display_entry = ttk.Entry(target_cols_select_frame, textvariable=selected_headers_var, state="readonly")
-    selected_display_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-
-    def handle_open_searchable_dialog():
-        open_searchable_dialog(
-            root,
-            CARBON_HEADER_OPTIONS,
-            state["selected_carbon_headers"],
-            update_header_selection_display
-        )
-
-    select_btn = ttk.Button(target_cols_select_frame, text="Select Headers...", command=handle_open_searchable_dialog)
-    select_btn.pack(side=tk.RIGHT)
-
-    # Other mode template file & dropdown frame
+    # Template file & multi-select frame
     other_target_frame = ttk.Frame(target_cols_frame)
+    other_target_frame.pack(fill=tk.X, expand=True)
 
     tpl_file_subframe = ttk.Frame(other_target_frame)
     tpl_file_subframe.pack(fill=tk.X, expand=True, pady=(0, 2))
@@ -969,65 +1003,165 @@ def create_application():
         path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
         if path:
             template_file_var.set(path)
-            load_template_headers()
 
     ttk.Button(tpl_file_subframe, text="Browse...", command=browse_template_file).pack(side=tk.LEFT, padx=(0, 2))
 
-    def load_template_headers():
+    # Checkboxes frame for options
+    tpl_opt_subframe = ttk.Frame(other_target_frame)
+    tpl_opt_subframe.pack(fill=tk.X, expand=True, pady=(2, 2))
+
+    order_matters_check = ttk.Checkbutton(
+        tpl_opt_subframe, 
+        text="Order matters for duplicates", 
+        variable=order_matters_var
+    )
+    order_matters_check.pack(side=tk.LEFT, padx=(0, 10))
+
+    multiple_dates_check = ttk.Checkbutton(
+        tpl_opt_subframe, 
+        text="Repeated date fields", 
+        variable=multiple_dates_var,
+        state="disabled"
+    )
+    multiple_dates_check.pack(side=tk.LEFT, padx=0)
+
+    # Partitioned file options subframe
+    partition_opt_subframe = ttk.Frame(other_target_frame)
+    partition_opt_subframe.pack(fill=tk.X, expand=True, pady=(2, 2))
+
+    is_partitioned_check = ttk.Checkbutton(
+        partition_opt_subframe,
+        text="Is file partitioned?",
+        variable=is_partitioned_var
+    )
+    is_partitioned_check.pack(side=tk.LEFT, padx=(0, 10))
+
+    partition_size_label = ttk.Label(partition_opt_subframe, text="Partition Size (2-50,000):")
+    def validate_digits_only(char):
+        if not char:
+            return True
+        return char.isdigit()
+
+    vcmd_digits = root.register(validate_digits_only)
+    partition_size_entry = ttk.Entry(partition_opt_subframe, textvariable=partition_size_var, width=8, validate="key", validatecommand=(vcmd_digits, "%S"))
+
+
+    def on_partition_toggle(*args):
+        if is_partitioned_var.get():
+            partition_size_label.pack(side=tk.LEFT, padx=(5, 2))
+            partition_size_entry.pack(side=tk.LEFT, padx=2)
+            multiple_dates_var.set(True)
+            multiple_dates_check.config(state="disabled")
+        else:
+            partition_size_label.pack_forget()
+            partition_size_entry.pack_forget()
+            multiple_dates_check.config(state="normal")
+
+    is_partitioned_var.trace_add("write", on_partition_toggle)
+    on_partition_toggle()
+
+    tpl_select_subframe = ttk.Frame(other_target_frame)
+    tpl_select_subframe.pack(fill=tk.X, expand=True, pady=(2, 0))
+
+    selected_template_display_entry = ttk.Entry(tpl_select_subframe, textvariable=selected_template_headers_var, state="readonly")
+    selected_template_display_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+    def handle_open_template_searchable_dialog():
         path = template_file_var.get().strip()
-        headers = get_headers_from_file(path)
-        if headers:
-            template_combo['values'] = headers
-            if headers:
-                template_combo.set(headers[0])
-        else:
-            template_combo['values'] = []
-            template_combo.set("No headers found")
+        order_matters = order_matters_var.get()
+        multiple_dates = multiple_dates_var.get()
+        headers = get_headers_from_file(path, order_matters=order_matters, multiple_dates=multiple_dates)
+        if not headers:
+            messagebox.showerror("Error", f"Could not load headers from template file:\n{path}")
+            return
+        open_searchable_dialog(
+            root,
+            headers,
+            state["selected_template_headers"],
+            update_template_header_selection_display,
+            dialog_title="Select Template Headers"
+        )
 
-    ttk.Button(tpl_file_subframe, text="Load", command=load_template_headers).pack(side=tk.LEFT, padx=(0, 2))
+    select_template_btn = ttk.Button(tpl_select_subframe, text="Select Headers...", command=handle_open_template_searchable_dialog)
+    select_template_btn.pack(side=tk.RIGHT)
 
-    tpl_combo_subframe = ttk.Frame(other_target_frame)
-    tpl_combo_subframe.pack(fill=tk.X, expand=True, pady=(2, 0))
+    # --- Date Formatting Configuration Section ---
+    ttk.Label(config_frame, text="Output Date Format:").grid(row=2, column=0, sticky=tk.W, pady=1)
+    
+    def validate_date_format_char(char):
+        if not char:
+            return True
+        for c in char:
+            if c.isalpha() and c.upper() not in ('M', 'D', 'Y'):
+                return False
+        return True
 
-    ttk.Label(tpl_combo_subframe, text="Template Column:").pack(side=tk.LEFT, padx=(0, 5))
-    template_combo = ttk.Combobox(tpl_combo_subframe, textvariable=template_headers_var, state="readonly")
-    template_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    def enforce_upper_format(var):
+        val = var.get()
+        new_val = val.replace('d', 'D').replace('m', 'M').replace('y', 'Y')
+        if new_val != val:
+            var.set(new_val)
 
-    root.after(200, load_template_headers)
-    template_file_var.trace_add("write", lambda *args: load_template_headers())
+    vcmd = root.register(validate_date_format_char)
 
-    def on_source_type_changed(*args):
-        selected_mode = source_type_var.get()
-        if selected_mode == "Carbon":
-            other_target_frame.pack_forget()
-            target_cols_select_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        else:
-            target_cols_select_frame.pack_forget()
-            other_target_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    output_date_format_var.trace_add("write", lambda *args: enforce_upper_format(output_date_format_var))
+    output_format_entry = ttk.Entry(config_frame, textvariable=output_date_format_var, validate="key", validatecommand=(vcmd, "%S"))
+    output_format_entry.grid(row=2, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
-    source_type_var.trace_add("write", on_source_type_changed)
-    on_source_type_changed()
+    ttk.Label(config_frame, text="Input Date Fields Count:").grid(row=3, column=0, sticky=tk.W, pady=1)
 
-    ttk.Label(config_frame, text="Output Column Renaming:").grid(row=2, column=0, sticky=tk.W, pady=1)
+    input_fields_config_frame = ttk.Frame(config_frame)
+    input_fields_config_frame.grid(row=3, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+
+    num_fields_combo = ttk.Combobox(input_fields_config_frame, textvariable=num_fields_var, values=["1", "2", "3", "4", "5", "6", "7", "8"], width=5, state="readonly")
+    num_fields_combo.pack(side=tk.LEFT, padx=(0, 5))
+
+    input_formats_container = ttk.Frame(config_frame)
+    input_formats_container.grid(row=4, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+
+    def generate_format_inputs():
+        for widget in input_formats_container.winfo_children():
+            widget.destroy()
+        input_format_entries.clear()
+
+        try:
+            count = int(num_fields_var.get())
+        except Exception:
+            count = 1
+
+        for i in range(count):
+            row_f = ttk.Frame(input_formats_container)
+            row_f.pack(fill=tk.X, expand=True, pady=1)
+            ttk.Label(row_f, text=f"Field {i+1} Format:", width=15).pack(side=tk.LEFT)
+            ent_var = tk.StringVar(value="MM/DD/YYYY" if i==0 else "YYYY")
+            ent_var.trace_add("write", lambda *args, v=ent_var: enforce_upper_format(v))
+            ent = ttk.Entry(row_f, textvariable=ent_var, validate="key", validatecommand=(vcmd, "%S"))
+            ent.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+            input_format_entries.append(ent_var)
+
+    gen_formats_btn = ttk.Button(input_fields_config_frame, text="Generate Format Inputs", command=generate_format_inputs)
+    gen_formats_btn.pack(side=tk.LEFT)
+
+    generate_format_inputs()
+
+    ttk.Label(config_frame, text="Start Date (MM/DD/YYYY):").grid(row=5, column=0, sticky=tk.W, pady=1)
+    start_date_entry = ttk.Entry(config_frame)
+    start_date_entry.grid(row=5, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+
+    ttk.Label(config_frame, text="End Date (MM/DD/YYYY):").grid(row=6, column=0, sticky=tk.W, pady=1)
+    end_date_entry = ttk.Entry(config_frame)
+    end_date_entry.grid(row=6, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+
+    ttk.Label(config_frame, text="Output Column Renaming:").grid(row=7, column=0, sticky=tk.W, pady=1)
 
     rename_frame = ttk.Frame(config_frame)
-    rename_frame.grid(row=2, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+    rename_frame.grid(row=7, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
     rename_status_entry = ttk.Entry(rename_frame, textvariable=rename_status_var, state="readonly")
     rename_status_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
     def handle_open_rename_dialog():
-        selected_mode = source_type_var.get()
-        available_cols = []
-
-        if selected_mode == "Carbon":
-            available_cols = sorted(list(state["selected_carbon_headers"]))
-        else:
-            sel_col = template_headers_var.get().strip()
-            if sel_col and sel_col != "No headers found":
-                available_cols = [sel_col]
-            else:
-                available_cols = []
+        available_cols = sorted(list(state["selected_template_headers"]))
 
         if state["calculated_fields"]:
             for calc_col in state["calculated_fields"].keys():
@@ -1035,7 +1169,7 @@ def create_application():
                     available_cols.append(calc_col)
 
         if not available_cols:
-            messagebox.showinfo("Rename Columns", "Please select or load target column filters first before configuring renames.")
+            messagebox.showinfo("Rename Columns", "Please select target column filters first before configuring renames.")
             return
 
         open_rename_dialog(
@@ -1047,14 +1181,6 @@ def create_application():
 
     rename_btn = ttk.Button(rename_frame, text="Configure Renames...", command=handle_open_rename_dialog)
     rename_btn.pack(side=tk.RIGHT)
-
-    ttk.Label(config_frame, text="Start Date (YYYY/MM/DD):").grid(row=3, column=0, sticky=tk.W, pady=1)
-    start_date_entry = ttk.Entry(config_frame)
-    start_date_entry.grid(row=3, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
-
-    ttk.Label(config_frame, text="End Date (YYYY/MM/DD):").grid(row=4, column=0, sticky=tk.W, pady=1)
-    end_date_entry = ttk.Entry(config_frame)
-    end_date_entry.grid(row=4, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
     # --- Metrics Opt-In/Opt-Out Option Frame (Off by Default) ---
     options_frame = ttk.LabelFrame(main_frame, text="Preferences & Telemetry", padding="6")
@@ -1094,7 +1220,7 @@ def create_application():
 
     def toggle_debug_window():
         if not state["debug_visible"]:
-            root.geometry("750x760")
+            root.geometry("750x860")
             debug_frame.pack(fill=tk.BOTH, expand=True, pady=4)
             debug_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             debug_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1102,7 +1228,7 @@ def create_application():
             state["debug_visible"] = True
         else:
             debug_frame.pack_forget()
-            root.geometry("750x580")
+            root.geometry("750x720")
             debug_toggle_btn.config(text="Show Debug Window")
             state["debug_visible"] = False
 
@@ -1116,8 +1242,13 @@ def create_application():
         calc_fields,
         start_dates,
         end_dates,
-        source_type,
         enable_metrics,
+        input_date_formats,
+        output_date_format,
+        order_matters,
+        multiple_dates,
+        is_partitioned,
+        partition_size,
         chunk_size=100000
     ):
         try:
@@ -1132,7 +1263,12 @@ def create_application():
                 start_date_str=start_dates,
                 end_date_str=end_dates,
                 enable_metrics=enable_metrics,
-                source_type=source_type,
+                input_date_formats=input_date_formats,
+                output_date_format=output_date_format,
+                order_matters=order_matters,
+                multiple_dates=multiple_dates,
+                is_partitioned=is_partitioned,
+                partition_size=partition_size,
                 chunksize=chunk_size,
                 debug_func=log_message,
                 progress_func=update_progress
@@ -1158,15 +1294,25 @@ def create_application():
         file_in = ",".join(file_in_list)
         file_out = output_entry.get().strip()
 
-        source_type = source_type_var.get()
-        if source_type == "Carbon":
-            target_cols = ",".join(sorted(list(state["selected_carbon_headers"])))
-        else:
-            target_cols = template_headers_var.get().strip()
-
+        target_cols = ",".join(sorted(list(state["selected_template_headers"])))
         start_dates = start_date_entry.get().strip()
         end_dates = end_date_entry.get().strip()
         enable_metrics = enable_metrics_var.get()
+        output_date_format = output_date_format_var.get().strip()
+        input_date_formats = [ent.get().strip() for ent in input_format_entries if ent.get().strip()]
+        order_matters = order_matters_var.get()
+        multiple_dates = multiple_dates_var.get()
+        is_partitioned = is_partitioned_var.get()
+        
+        try:
+            partition_size = int(partition_size_var.get().strip())
+        except Exception:
+            partition_size = 0
+
+        if is_partitioned and (partition_size < 2 or partition_size > 50000):
+            log_message("ERROR: Partition size must be between 2 and 50,000 columns.")
+            messagebox.showerror("Error", "Partition size must be between 2 and 50,000 columns.")
+            return
 
         if not file_in or not file_out:
             log_message("ERROR: Both input and output file paths must be selected.")
@@ -1185,8 +1331,13 @@ def create_application():
                 dict(state["calculated_fields"]),
                 start_dates,
                 end_dates,
-                source_type,
-                enable_metrics
+                enable_metrics,
+                input_date_formats,
+                output_date_format,
+                order_matters,
+                multiple_dates,
+                is_partitioned,
+                partition_size
             ),
             daemon=True
         )
